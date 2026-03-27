@@ -27,7 +27,7 @@ jobs:
           npm install --force
           npm install @capacitor/assets @capacitor/cli @capacitor/android
 
-            - name: Prepare Web Assets
+      - name: Prepare Web Assets
         run: |
           mkdir -p www
           # Esta línea busca cualquier archivo que empiece con 'index' y lo mueve a www/index.html
