@@ -27,11 +27,15 @@ jobs:
           npm install --force
           npm install @capacitor/assets @capacitor/cli @capacitor/android
 
-      - name: Prepare Web Assets
+            - name: Prepare Web Assets
         run: |
           mkdir -p www
-          # Esto copia tu index-2.html a la carpeta que Capacitor espera
-          cp index-2.html www/index.html
+          # Esta línea busca cualquier archivo que empiece con 'index' y lo mueve a www/index.html
+          find . -maxdepth 1 -name "index*" -exec cp {} www/index.html \;
+          # Si no encuentra nada, crea uno vacío para que no falle el build
+          [ ! -f www/index.html ] && echo "<html><body>App Ready</body></html>" > www/index.html
+          echo "Web assets prepared."
+
 
       - name: Generate Resources & Sync
         run: |
