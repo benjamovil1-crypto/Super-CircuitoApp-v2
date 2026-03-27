@@ -24,8 +24,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          npm install
-          npm install @capacitor/assets --save-dev
+          npm install --force
+          npm install @capacitor/assets @capacitor/cli @capacitor/android
 
       - name: Prepare Web Assets
         run: |
