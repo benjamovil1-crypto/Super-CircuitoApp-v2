@@ -1,40 +1,147 @@
-name: Build Super CircuitoApp APK
+name: Build APK — Super CircuitoApp
 
 on:
   push:
-    branches: [ main ] # Se activa al subir cambios a la rama principal
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout Source
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Node 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
+      - name: npm install
+        run: npm install
 
-      - name: Install Dependencies
-        run: |
-          npm install --force
-          npm install @capacitor/assets @capacitor/cli @capacitor/android
-
-      - name: Prepare Web Assets
+      - name: Preparar www/
         run: |
           mkdir -p www
-          # Esta línea busca cualquier archivo que empiece con 'index' y lo mueve a www/index.html
-          find . -maxdepth 1 -name "index*" -exec cp {} www/index.html \;
-          # Si no encuentra nada, crea uno vacío para que no falle el build
-          [ ! -f www/index.html ] && echo "<html><body>App Ready</body></html>" > www/index.html
-          echo "Web assets prepared."
+          cp index.html www/index.html
+          SIZE=$(wc -c < www/index.html)
+          echo "www/index.html — $SIZE bytes"
+          [ "$SIZE" -gt 50000 ] || { echo "ERROR: index.html muy pequeño"; exit 1; }
+
+      - name: Cap add android
+        run: npx cap add android
+
+      - name: Cap sync
+        run: npx cap sync android
+
+      - name: Instalar ícono
+        run: |
+          echo "=== Archivos en icons/ ==="
+          ls -la icons/ 2>/dev/null || echo "AVISO: no hay carpeta icons/"
+          for D in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-${D}
+          done
+          for D in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            SRC="icons/ic_launcher_${D}.png"
+            DST="android/app/src/main/res/mipmap-${D}"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "${DST}/ic_launcher.png"
+              cp "$SRC" "${DST}/ic_launcher_round.png"
+              echo "OK $D"
+            else
+              FB=$(ls icons/*.png 2>/dev/null | head -1)
+              if [ -n "$FB" ]; then
+                cp "$FB" "${DST}/ic_launcher.png"
+                cp "$FB" "${DST}/ic_launcher_round.png"
+                echo "Fallback $D <- $FB"
+              fi
+            fi
+          done
+          if [ -f "icons/ic_launcher_foreground.png" ]; then
+            for D in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+              cp icons/ic_launcher_foreground.png \
+                android/app/src/main/res/mipmap-${D}/ic_launcher_foreground.png
+            done
+            echo "OK foreground"
+          fi
+          find android/app/src/main/res/mipmap-* -name "ic_launcher.png" | sort
+
+      - name: Notification icon
+        run: |
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_stat_notify.xml << 'XMLEOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+            <path android:fillColor="#FFFFFF"
+              android:pathData="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,7V13L15.5,15.5L16.5,13.8L13,12V7H11Z"/>
+          </vector>
+          XMLEOF
+          echo "OK notification icon"
+
+      - name: Permisos AndroidManifest
+        run: |
+          M="android/app/src/main/AndroidManifest.xml"
+          sed -i 's|<uses-permission android:name="android.permission.INTERNET"/>|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.VIBRATE"/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>|' "$M"
+          echo "OK permisos"
+
+      - name: compileSdk 35
+        run: |
+          G="android/app/build.gradle"
+          sed -i 's/compileSdk .*/compileSdk 35/' "$G"
+          sed -i 's/targetSdk .*/targetSdk 35/' "$G"
+          echo "OK gradle"
+
+      - name: Registrar plugins en MainActivity
+        run: |
+          MAIN=$(find android -name "MainActivity.java" | head -1)
+          echo "MainActivity: $MAIN"
+          sed -i 's/import com.getcapacitor.BridgeActivity;/import com.getcapacitor.BridgeActivity;\nimport com.capacitorjs.plugins.localnotifications.LocalNotificationsPlugin;\nimport com.capacitorjs.plugins.filesystem.FilesystemPlugin;/' "$MAIN"
+          sed -i 's/super.onCreate(savedInstanceState);/registerPlugin(LocalNotificationsPlugin.class);\n    registerPlugin(FilesystemPlugin.class);\n    super.onCreate(savedInstanceState);/' "$MAIN"
+          echo "OK plugins"
+          cat "$MAIN"
+
+      - name: Gradle permissions
+        run: chmod +x android/gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Build APK
+        run: |
+          cd android
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx2g -XX:MaxMetaspaceSize=512m"
+
+      - name: Renombrar APK
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          ls -lh "$APK"
+          cp "$APK" android/app/build/outputs/apk/debug/SuperCircuitoApp-v1.0.0.apk
+          echo "OK APK listo"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperCircuitoApp-v1.0.0
+          path: android/app/build/outputs/apk/debug/SuperCircuitoApp-v1.0.0.apk
+          retention-days: 90
+          if-no-files-found: error          echo "Web assets prepared."
 
 
       - name: Generate Resources & Sync
